@@ -1,0 +1,154 @@
+library(tidyverse)
+library(tidymodels)
+
+# pros + cons of each model we use
+# git is the version control software
+# github is the cloud repository hosting service
+
+
+# Initial Data Processing -----
+
+# given the mtcars data set, I want to classify based on transmition, am
+# given the mpg, hp, and wt of a car
+mtcars
+
+mtcars <- mtcars %>%
+  mutate(am = factor(am)) # why do you need this?
+mtcars
+
+# Fit raw model on everything -----
+
+# use knn to fit the model on everything
+knn_spec <- nearest_neighbor(weight_func = "rectangular", neighbors = 5) %>%
+  set_engine("kknn") %>%
+  set_mode("classification")
+knn_spec
+
+# process data for model
+car_recipe_raw <- recipe(am ~ mpg + hp + wt, data = mtcars)
+car_recipe_raw
+
+knn_fit_1 <- workflow() %>%
+  add_recipe(car_recipe_raw) %>%
+  add_model(knn_spec) %>%
+  fit(data = mtcars)
+knn_fit_1
+
+mtcars %>%
+  bind_cols(predict(knn_fit_1, mtcars)) %>%
+  count(am, .pred_class)
+
+# Fit scaled model on everything -----
+
+car_recipe_processed <- recipe(am ~ mpg + hp + wt, data = mtcars) %>%
+  step_scale(all_predictors()) %>% # why do you need these steps?
+  step_center(all_predictors())
+car_recipe_processed
+
+
+knn_fit_2 <- workflow() %>%
+  add_recipe(car_recipe_processed) %>%
+  add_model(knn_spec) %>%
+  fit(data = mtcars)
+knn_fit_2
+
+
+mtcars %>%
+  bind_cols(predict(knn_fit_2, mtcars)) %>%
+  count(am, .pred_class)
+
+# what is the optimal value of k? -----
+
+ks <- tibble(neighbors = seq(from = 1, to = 10, by = 1))
+
+knn_spec <- nearest_neighbor(weight_func = "rectangular", neighbors = tune()) %>%
+  set_engine("kknn") %>%
+  set_mode("classification")
+
+data_vfold <- vfold_cv(mtcars, v = 5, strata = am)
+
+results <- workflow() %>%
+  add_recipe(car_recipe_processed) %>%
+  add_model(knn_spec) %>%
+  tune_grid(resamples = data_vfold, grid = ks) %>%
+  collect_metrics()
+
+accuracies <- results %>%
+  filter(.metric == "accuracy")
+
+accuracy_vs_k <- ggplot(accuracies, aes(x = neighbors, y = mean)) +
+  geom_point() +
+  geom_line() +
+  labs(x = "Neighbors", y = "Accuracy Estimate") +
+  theme(text = element_text(size = 12))
+
+accuracy_vs_k
+
+# How do we make sure we can predict well? -----
+
+# what can can go wrong here?
+
+# Splitting data
+
+set.seed(4242)
+
+car_split <- initial_split(mtcars, prop = 0.75, strata = am)
+car_train <- training(car_split)
+car_test <- testing(car_split)
+
+# Create recipe
+
+car_recipe <- recipe(am ~ mpg + hp + wt, data = mtcars) %>%
+  step_scale(all_predictors()) %>%
+  step_center(all_predictors())
+
+# Fit the model
+
+knn_spec <- nearest_neighbor(weight_func = "rectangular", neighbors = 3) %>%
+  set_engine("kknn") %>%
+  set_mode("classification")
+
+knn_fit <- workflow() %>%
+  add_recipe(car_recipe) %>%
+  add_model(knn_spec) %>%
+  fit(data = mtcars)
+
+knn_fit
+
+car_predictions_1 <- predict(knn_fit, car_test) %>%
+  bind_cols(car_test)
+car_predictions_1
+
+car_predictions_1 %>%
+  metrics(truth = am, estimate = .pred_class)
+
+# What happens when we use the wrong training/testing data -----
+
+car_recipe_train <- recipe(am ~ mpg + hp + wt, data = car_train) %>%
+  step_scale(all_predictors()) %>%
+  step_center(all_predictors())
+
+car_recipe_train
+
+knn_fit_train <- workflow() %>%
+  add_recipe(car_recipe_train) %>%
+  add_model(knn_spec) %>%
+  fit(data = car_train)
+
+knn_fit_train
+
+car_predictions_2 <- predict(knn_fit_train, car_test) %>%
+  bind_cols(car_test)
+car_predictions_2
+
+car_predictions_2 %>%
+  metrics(truth = am, estimate = .pred_class)
+
+
+# compare the 2 accuracy scores from the models we just fit?
+# why is one higher than the other?
+car_predictions_1 %>%
+  metrics(truth = am, estimate = .pred_class)
+
+car_predictions_2 %>%
+  metrics(truth = am, estimate = .pred_class)
